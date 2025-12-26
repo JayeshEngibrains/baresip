@@ -103,6 +103,11 @@ struct autx {
 	struct {
 		uint64_t aubuf_overrun;
 		uint64_t aubuf_underrun;
+		uint64_t alsa_frames;
+		uint64_t aubuf_frames;
+		uint64_t aufilt_frames;
+		uint64_t enc_frames;
+		uint64_t rtp_packets;
 	} stats;
 
 	struct {
@@ -197,6 +202,9 @@ static void audio_destructor(void *arg)
 	struct audio *a = arg;
 
 	debug("audio: destroyed (started=%d)\n", a->started);
+
+	info("audio: tx stats: alsa_frames=%llu, aubuf_frames=%llu, aufilt_frames=%llu, enc_frames=%llu, rtp_packets=%llu\n",
+	     a->tx.stats.alsa_frames, a->tx.stats.aubuf_frames, a->tx.stats.aufilt_frames, a->tx.stats.enc_frames, a->tx.stats.rtp_packets);
 
 	stop_tx(&a->tx, a);
 	stream_enable_rx(a->strm, false);
@@ -360,6 +368,8 @@ static void encode_rtp_send(struct audio *a, struct autx *tx,
 		goto out;
 	}
 
+	tx->stats.enc_frames++;
+
 	tx->mb->pos = STREAM_PRESZ;
 	tx->mb->end = STREAM_PRESZ + ext_len + len;
 
@@ -374,6 +384,8 @@ static void encode_rtp_send(struct audio *a, struct autx *tx,
 			mtx_unlock(a->tx.mtx);
 			if (err)
 				goto out;
+			
+			tx->stats.rtp_packets++;
 		}
 
 		if (ts_delta) {
@@ -428,6 +440,7 @@ static void poll_aubuf_tx(struct audio *a)
 	/* timed read from audio-buffer */
 	auframe_init(&af, tx->src_fmt, tx->sampv, sampc, srate, ch);
 	aubuf_read_auframe(tx->aubuf, &af);
+	tx->stats.aubuf_frames++;
 
 	mtx_lock(tx->mtx);
 	/* Process exactly one audio-frame in list order */
@@ -438,6 +451,8 @@ static void poll_aubuf_tx(struct audio *a)
 			err |= st->af->ench(st, &af);
 	}
 	mtx_unlock(tx->mtx);
+	tx->stats.aufilt_frames++;
+
 	if (err) {
 		warning("audio: aufilter encode: %m\n", err);
 	}
@@ -547,6 +562,8 @@ static void ausrc_read_handler(struct auframe *af, void *arg)
 
 	if (tx->muted)
 		auframe_mute(af);
+
+	tx->stats.alsa_frames++;
 
 	if (aubuf_cur_size(tx->aubuf) >= tx->aubuf_maxsz) {
 
@@ -905,6 +922,7 @@ static int tx_thread(void *arg)
 
 		if (aubuf_cur_size(tx->aubuf) >= tx->psize) {
 
+			/* debug("audio: aubuf -> encoder (size=%zu)\n", aubuf_cur_size(tx->aubuf)); */
 			poll_aubuf_tx(a);
 		}
 		else {
@@ -1092,6 +1110,8 @@ static int start_source(struct autx *tx, struct audio *a, struct list *ausrcl)
 			if (err)
 				return err;
 		}
+
+		warning("audio: pipeline stats: alsa_src -> aubuf (maxsz=%zu)\n", tx->aubuf_maxsz);
 
 		err = ausrc_alloc(&tx->ausrc, ausrcl,
 				  tx->module,

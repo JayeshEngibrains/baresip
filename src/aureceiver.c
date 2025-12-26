@@ -60,6 +60,11 @@ struct audio_recv {
 		RE_ATOMIC uint64_t latency;   /**< Latency in [ms]           */
 		int32_t jitter;       /**< Auframe push jitter [us]          */
 		int32_t dmax;         /**< Max deviation [us]                */
+		uint64_t rtp_packets;
+		uint64_t dec_frames;
+		uint64_t aufilt_frames;
+		uint64_t aubuf_frames;
+		uint64_t alsa_frames;
 	} stats;
 
 	mtx_t *mtx;
@@ -77,6 +82,9 @@ struct audio_recv {
 static void destructor(void *arg)
 {
 	struct audio_recv *ar = arg;
+
+	info("audio: rx stats: alsa_frames=%llu, aubuf_frames=%llu, aufilt_frames=%llu, dec_frames=%llu, rtp_packets=%llu\n",
+	     ar->stats.alsa_frames, ar->stats.aubuf_frames, ar->stats.aufilt_frames, ar->stats.dec_frames, ar->stats.rtp_packets);
 
 	mem_deref(ar->dec);
 	mem_deref(ar->aubuf);
@@ -253,6 +261,8 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 		sampc = 0;
 	}
 
+	ar->stats.dec_frames++;
+
 	auframe_init(&af, ar->fmt, ar->sampv, sampc, ac->srate, ac->ch);
 	af.timestamp = ((uint64_t) hdr->ts) * AUDIO_TIMEBASE / ac->crate;
 
@@ -265,7 +275,11 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 	if (err)
 		goto out;
 
+	ar->stats.aufilt_frames++;
+
 	err = aurecv_push_aubuf(ar, &af);
+	if (!err)
+		ar->stats.aubuf_frames++;
  out:
 	return err;
 }
@@ -302,6 +316,8 @@ void aurecv_receive(struct audio_recv *ar, const struct rtp_header *hdr,
 		*ignore = true;
 		return;
 	}
+
+	ar->stats.rtp_packets++;
 
 	*ignore = false;
 
@@ -635,6 +651,8 @@ static void check_plframe(struct auframe *af1, struct auframe *af2)
 static void auplay_write_handler(struct auframe *af, void *arg)
 {
 	struct audio_recv *ar = arg;
+
+	ar->stats.alsa_frames++;
 
 	if (!ar->done_first) {
 		struct auframe afr;

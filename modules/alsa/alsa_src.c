@@ -65,17 +65,38 @@ static int read_thread(void *arg)
 
 		/* Copy PCM data from test_audio */
 		size_t bytes_to_copy = num_frames * sizeof(int16_t);
+		
+		/* Check if we have reached the end of the test audio */
 		if (st->pcm_index + num_frames > 192000) {
-			/* Wrap around */
-			size_t first_part = (192000 - st->pcm_index) * sizeof(int16_t);
-			memcpy(st->sampv, &test_audio_pcm[st->pcm_index], first_part);
-			memcpy((char*)st->sampv + first_part, &test_audio_pcm[0], bytes_to_copy - first_part);
-			st->pcm_index = (bytes_to_copy - first_part) / sizeof(int16_t);
-		} else {
-			memcpy(st->sampv, &test_audio_pcm[st->pcm_index], bytes_to_copy);
-			st->pcm_index += num_frames;
-			if (st->pcm_index >= 192000) st->pcm_index = 0;
+			warning("alsa_src: End of test audio reached. Stopping stream.\n");
+			
+			/* Send remaining frames if any */
+			if (st->pcm_index < 192000) {
+				size_t remaining = 192000 - st->pcm_index;
+				memcpy(st->sampv, &test_audio_pcm[st->pcm_index], remaining * sizeof(int16_t));
+				
+				auframe_init(&af, st->prm.fmt, st->sampv, remaining * st->prm.ch,
+					     st->prm.srate, st->prm.ch);
+				af.timestamp = frames * AUDIO_TIMEBASE / st->prm.srate;
+				frames += remaining;
+				st->rh(&af, st->arg);
+			}
+			
+			/* Stop the thread loop */
+			re_atomic_rlx_set(&st->run, false);
+			
+			/* Trigger hangup - this is a hack, ideally we should signal the application */
+			/* Since we don't have easy access to UA here, we'll just stop sending audio */
+			/* The user will have to manually hang up or we can try to use a global event if available */
+			
+			/* Try to print stats here */
+			warning("alsa_src: Total frames sent: %llu\n", frames);
+			
+			break;
 		}
+
+		memcpy(st->sampv, &test_audio_pcm[st->pcm_index], bytes_to_copy);
+		st->pcm_index += num_frames;
 
 		debug("alsa_src: copied %d frames from test_audio, index now %zu, first sample: %d\n", 
 		      num_frames, st->pcm_index, ((int16_t*)st->sampv)[0]);
