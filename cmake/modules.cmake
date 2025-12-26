@@ -31,6 +31,7 @@ set(MODULES
   evdev
   fakevideo
   g711
+  g726
   libg722
   g722
   g7221

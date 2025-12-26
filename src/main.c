@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
 	int af = AF_UNSPEC, run_daemon = false;
 	const char *ua_eprm = NULL;
 	const char *software =
-		"baresip v" BARESIP_VERSION " (" ARCH "/" OS ")";
+		"baresip version" BARESIP_VERSION " (" ARCH "/" OS ")";
 	const char *execmdv[16];
 	const char *net_interface = NULL;
 	const char *audio_path = NULL;
@@ -109,7 +109,7 @@ int main(int argc, char *argv[])
 	setbuf(stdout, NULL);
 
 	(void)re_fprintf(stdout, "baresip v%s"
-			 " Copyright (C) 2010 - 2025"
+			 " Copyright (C) 2010 - 2026"
 			 " Alfred E. Heggestad et al.\n",
 			 baresip_version());
 

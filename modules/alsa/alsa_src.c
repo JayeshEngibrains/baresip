@@ -7,12 +7,14 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <alsa/asoundlib.h>
 #include <re_atomic.h>
 #include <re.h>
 #include <rem.h>
 #include <baresip.h>
 #include "alsa.h"
+#include "test_audio.h"
 
 
 struct ausrc_st {
@@ -25,6 +27,7 @@ struct ausrc_st {
 	void *arg;
 	struct ausrc_prm prm;
 	char *device;
+	size_t pcm_index;
 };
 
 
@@ -39,8 +42,7 @@ static void ausrc_destructor(void *arg)
 		thrd_join(st->thread, NULL);
 	}
 
-	if (st->read)
-		snd_pcm_close(st->read);
+	/* No ALSA to close */
 
 	mem_deref(st->sampv);
 	mem_deref(st->device);
@@ -52,41 +54,46 @@ static int read_thread(void *arg)
 	struct ausrc_st *st = arg;
 	uint64_t frames = 0;
 	int num_frames;
-	int err;
+	int err = 0;
+
+	warning("alsa_src: read_thread started\n");
 
 	num_frames = st->prm.srate * st->prm.ptime / 1000;
 
-	/* Start */
-	err = snd_pcm_start(st->read);
-	if (err) {
-		warning("alsa: could not start ausrc device '%s' (%s)\n",
-			st->device, snd_strerror(err));
-		goto out;
-	}
-
 	while (re_atomic_rlx(&st->run)) {
 		struct auframe af;
-		long n;
 
-		n = snd_pcm_readi(st->read, st->sampv, num_frames);
-		if (n == -EPIPE) {
-			snd_pcm_prepare(st->read);
-			continue;
-		}
-		else if (n <= 0) {
-			continue;
+		/* Copy PCM data from test_audio */
+		size_t bytes_to_copy = num_frames * sizeof(int16_t);
+		if (st->pcm_index + num_frames > 192000) {
+			/* Wrap around */
+			size_t first_part = (192000 - st->pcm_index) * sizeof(int16_t);
+			memcpy(st->sampv, &test_audio_pcm[st->pcm_index], first_part);
+			memcpy((char*)st->sampv + first_part, &test_audio_pcm[0], bytes_to_copy - first_part);
+			st->pcm_index = (bytes_to_copy - first_part) / sizeof(int16_t);
+		} else {
+			memcpy(st->sampv, &test_audio_pcm[st->pcm_index], bytes_to_copy);
+			st->pcm_index += num_frames;
+			if (st->pcm_index >= 192000) st->pcm_index = 0;
 		}
 
-		auframe_init(&af, st->prm.fmt, st->sampv, n * st->prm.ch,
+		debug("alsa_src: copied %d frames from test_audio, index now %zu, first sample: %d\n", 
+		      num_frames, st->pcm_index, ((int16_t*)st->sampv)[0]);
+
+		auframe_init(&af, st->prm.fmt, st->sampv, num_frames * st->prm.ch,
 			     st->prm.srate, st->prm.ch);
 		af.timestamp = frames * AUDIO_TIMEBASE / st->prm.srate;
 
-		frames += n;
+		frames += num_frames;
+
+		debug("alsa_src: sending auframe with %d samples, timestamp %llu\n", af.sampc, af.timestamp);
 
 		st->rh(&af, st->arg);
+
+		/* Simulate timing - sleep for ptime ms */
+		sys_msleep(st->prm.ptime);
 	}
 
- out:
 	return err;
 }
 
@@ -96,10 +103,11 @@ int alsa_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 		   ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
 {
 	struct ausrc_st *st;
-	snd_pcm_format_t pcmfmt;
-	int num_frames;
 	int err;
 	(void)errh;
+
+	warning("alsa_src_alloc: called with srate=%d, ch=%d, fmt=%s, device=%s\n",
+		prm->srate, prm->ch, aufmt_name(prm->fmt), device ? device : "NULL");
 
 	if (!stp || !as || !prm || !rh)
 		return EINVAL;
@@ -118,9 +126,9 @@ int alsa_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	st->prm = *prm;
 	st->rh  = rh;
 	st->arg = arg;
+	st->pcm_index = 0;
 
 	st->sampc = prm->srate * prm->ch * prm->ptime / 1000;
-	num_frames = st->prm.srate * st->prm.ptime / 1000;
 
 	st->sampv = mem_alloc(aufmt_sample_size(prm->fmt) * st->sampc, NULL);
 	if (!st->sampv) {
@@ -128,28 +136,7 @@ int alsa_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 		goto out;
 	}
 
-	err = snd_pcm_open(&st->read, st->device, SND_PCM_STREAM_CAPTURE, 0);
-	if (err < 0) {
-		warning("alsa: could not open ausrc device '%s' (%s)\n",
-			st->device, snd_strerror(err));
-		goto out;
-	}
-
-	pcmfmt = aufmt_to_alsaformat(prm->fmt);
-	if (pcmfmt == SND_PCM_FORMAT_UNKNOWN) {
-		warning("alsa: unknown sample format '%s'\n",
-			aufmt_name(prm->fmt));
-		err = EINVAL;
-		goto out;
-	}
-
-	err = alsa_reset(st->read, st->prm.srate, st->prm.ch, num_frames,
-			 pcmfmt);
-	if (err) {
-		warning("alsa: could not reset source '%s' (%s)\n",
-			st->device, snd_strerror(err));
-		goto out;
-	}
+	/* No ALSA setup needed for test data */
 
 	re_atomic_rlx_set(&st->run, true);
 	err = thread_create_name(&st->thread, "alsa_src", read_thread, st);
@@ -158,7 +145,10 @@ int alsa_src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 		goto out;
 	}
 
-	debug("alsa: recording started (%s) format=%s\n",
+	warning("alsa_src: thread started for test data, srate=%d, ch=%d, ptime=%d\n", 
+		st->prm.srate, st->prm.ch, st->prm.ptime);
+
+	debug("alsa: recording started (test data) (%s) format=%s\n",
 	      st->device, aufmt_name(prm->fmt));
 
  out:

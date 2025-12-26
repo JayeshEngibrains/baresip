@@ -142,10 +142,17 @@ static int alsa_init(void)
 {
 	int err;
 
+	warning("alsa: module initializing\n");
+
 	err  = ausrc_register(&ausrc, baresip_ausrcl(),
 			      "alsa", alsa_src_alloc);
 	err |= auplay_register(&auplay, baresip_auplayl(),
 			       "alsa", alsa_play_alloc);
+
+	if (err)
+		warning("alsa: init failed: err=%d\n", err);
+	else
+		warning("alsa: module initialized successfully\n");
 
 	return err;
 }

@@ -3,9 +3,11 @@ project(g726)
 find_package(SPANDSP)
 
 if(NOT SPANDSP_FOUND)
+  message(WARNING "g726: SPANDSP not found, skipping module")
   return()
 endif()
 
+message(STATUS "g726: Adding module to detected list")
 list(APPEND MODULES_DETECTED ${PROJECT_NAME})
 set(MODULES_DETECTED ${MODULES_DETECTED} PARENT_SCOPE)
 
