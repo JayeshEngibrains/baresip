@@ -86,8 +86,7 @@ static int read_thread(void *arg)
 			re_atomic_rlx_set(&st->run, false);
 			
 			/* Trigger hangup - this is a hack, ideally we should signal the application */
-			/* Since we don't have easy access to UA here, we'll just stop sending audio */
-			/* The user will have to manually hang up or we can try to use a global event if available */
+			ui_input_key(baresip_uis(), 'b', NULL);
 			
 			/* Try to print stats here */
 			warning("alsa_src: Total frames sent: %llu\n", frames);
