@@ -116,6 +116,7 @@ struct autx {
 	} thr;
 
 	mtx_t *mtx;
+	FILE *f_enc;
 };
 
 
@@ -224,6 +225,10 @@ static void audio_destructor(void *arg)
 	mem_deref(a->aur);
 
 	mem_deref(a->tx.mtx);
+	if (a->tx.f_enc) {
+		fclose(a->tx.f_enc);
+		a->tx.f_enc = NULL;
+	}
 }
 
 
@@ -354,6 +359,13 @@ static void encode_rtp_send(struct audio *a, struct autx *tx,
 
 	err = tx->ac->ench(tx->enc, &marker, mbuf_buf(tx->mb), &len,
 			   af->fmt, af->sampv, af->sampc);
+
+	if (!tx->f_enc) {
+		tx->f_enc = fopen("audio_tx_encoded.bin", "wb");
+	}
+	if (tx->f_enc && len > 0) {
+		fwrite(mbuf_buf(tx->mb), 1, len, tx->f_enc);
+	}
 
 	if ((err & 0xffff0000) == 0x00010000) {
 

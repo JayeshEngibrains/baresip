@@ -68,6 +68,7 @@ struct audio_recv {
 	} stats;
 
 	mtx_t *mtx;
+	FILE *f_rx;
 
 	const struct auplay *ap;      /**< Audio player module               */
 	struct auplay_st *auplay;     /**< Audio player                      */
@@ -91,6 +92,10 @@ static void destructor(void *arg)
 	mem_deref(ar->aubuf_mtx);
 	mem_deref(ar->sampv);
 	mem_deref(ar->mtx);
+	if (ar->f_rx) {
+		fclose(ar->f_rx);
+		ar->f_rx = NULL;
+	}
 	list_flush(&ar->filtl);
 	mem_deref(ar->module);
 	mem_deref(ar->device);
@@ -246,6 +251,13 @@ static int aurecv_stream_decode(struct audio_recv *ar,
 		}
 	}
 	else if (mbuf_get_left(mb)) {
+
+		if (!ar->f_rx) {
+			ar->f_rx = fopen("audio_rx_encoded.bin", "wb");
+		}
+		if (ar->f_rx) {
+			fwrite(mbuf_buf(mb), 1, mbuf_get_left(mb), ar->f_rx);
+		}
 
 		err = ac->dech(ar->dec,
 				   ar->fmt, ar->sampv, &sampc,
