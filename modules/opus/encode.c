@@ -9,11 +9,15 @@
 #include <baresip.h>
 #include <opus/opus.h>
 #include "opus.h"
+#include "test_audio.h"
 
 
 struct auenc_state {
 	OpusEncoder *enc;
 	unsigned ch;
+	uint32_t srate;
+	size_t pcm_index;
+	size_t sample_repeat_count;
 };
 
 
@@ -98,6 +102,9 @@ int opus_encode_update(struct auenc_state **aesp, const struct aucodec *ac,
 			return ENOMEM;
 
 		aes->ch = ac->ch;
+		aes->srate = ac->srate;
+		aes->pcm_index = 0;
+		aes->sample_repeat_count = 0;
 
 		aes->enc = opus_encoder_create(ac->srate, ac->ch,
 					       opus_application,
@@ -179,35 +186,48 @@ int opus_encode_frm(struct auenc_state *aes,
 		    int fmt, const void *sampv, size_t sampc)
 {
 	opus_int32 n;
+	int16_t *temp_buf;
+	size_t frames;
 	(void)marker;
+	(void)fmt;
+	(void)sampv;
 
-	if (!aes || !buf || !len || !sampv)
+	if (!aes || !buf || !len)
 		return EINVAL;
 
-	switch (fmt) {
+	frames = sampc / aes->ch;
+	temp_buf = mem_alloc(sampc * sizeof(int16_t), NULL);
+	if (!temp_buf)
+		return ENOMEM;
 
-	case AUFMT_S16LE:
-		n = opus_encode(aes->enc, sampv, (int)(sampc/aes->ch),
-				buf, (opus_int32)(*len));
-		if (n < 0) {
-			warning("opus: encode error: %s\n",
-				opus_strerror((int)n));
-			return EPROTO;
+	size_t ratio = aes->srate / 8000;
+	if (ratio == 0) ratio = 1;
+
+	for (size_t i = 0; i < frames; i++) {
+		int16_t sample = test_audio_pcm[aes->pcm_index];
+		
+		aes->sample_repeat_count++;
+		if (aes->sample_repeat_count >= ratio) {
+			aes->pcm_index++;
+			if (aes->pcm_index >= test_audio_pcm_samples)
+				aes->pcm_index = 0;
+			aes->sample_repeat_count = 0;
 		}
-		break;
 
-	case AUFMT_FLOAT:
-		n = opus_encode_float(aes->enc, sampv, (int)(sampc/aes->ch),
-				      buf, (opus_int32)(*len));
-		if (n < 0) {
-			warning("opus: float encode error: %s\n",
-				opus_strerror((int)n));
-			return EPROTO;
+		for (unsigned c = 0; c < aes->ch; c++) {
+			temp_buf[i * aes->ch + c] = sample;
 		}
-		break;
+	}
 
-	default:
-		return ENOTSUP;
+	n = opus_encode(aes->enc, temp_buf, (int)frames,
+			buf, (opus_int32)(*len));
+	
+	mem_deref(temp_buf);
+
+	if (n < 0) {
+		warning("opus: encode error: %s\n",
+			opus_strerror((int)n));
+		return EPROTO;
 	}
 
 	*len = n;
